@@ -37,8 +37,8 @@ class JointStateListener(Node):
 
         self.get_logger().info(' | '.join(output))
 
-def main(args=None):
-    rclpy.init(args=args)
+def main(args = None):
+    rclpy.init(args = args)
     node = JointStateListener()
 
     try:
