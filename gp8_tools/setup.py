@@ -25,7 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'python_listener = gp8_tools.python_listener:main',
-	    'python_plotter = gp8_tools.python_plotter:main'
+	    'python_plotter = gp8_tools.python_plotter:main',
         ],
     },
 )

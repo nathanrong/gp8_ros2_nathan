@@ -6,6 +6,7 @@ class JointStateListener(Node):
     def __init__(self):
         super().__init__('python_listener')
         self.latest_positions = {}
+        self.latest_velocity = {}
 
         self.subscription = self.create_subscription(
             JointState,
@@ -19,6 +20,7 @@ class JointStateListener(Node):
 
     def joint_state_callback(self, msg):
         self.latest_positions = dict(zip(msg.name, msg.position))
+        self.latest_velocity = dict(zip(msg.name, msg.velocity))
 
     def print_positions(self):
         if not self.latest_positions:
@@ -33,7 +35,8 @@ class JointStateListener(Node):
         for joint_name in joint_order:
             if joint_name in self.latest_positions:
                 position = self.latest_positions[joint_name]
-                output.append(f'{joint_name}: {position:.3f} rad')
+                velocity = self.latest_velocity[joint_name]
+                output.append(f'{joint_name}: {position:.3f} rad, {velocity:.3f} rad/s')
 
         self.get_logger().info(' | '.join(output))
 
