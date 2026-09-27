@@ -32,10 +32,11 @@
 
 6. Installed ROS 2 Jazzy using the official ROS apt-source method.
 
-7. Installed ROS 2 Jazzy Desktop:
+7. Installed ROS 2 Jazzy Desktop and Jazzy MoveIt package:
 
    ```bash
    sudo apt install ros-jazzy-desktop -y
+   sudo apt install ros-jazzy-moveit-py
    ```
 
 8. Added ROS Jazzy to the shell startup file:
