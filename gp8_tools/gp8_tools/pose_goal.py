@@ -1,13 +1,13 @@
 
 from pathlib import Path
-
+import time
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseStamped
 from launch_param_builder import load_yaml
 from moveit.planning import MoveItPy
 from moveit_configs_utils import MoveItConfigsBuilder
-
+from moveit_msgs.msg import DisplayTrajectory
 
 def main():
     # Build the complete MoveIt configuration.
@@ -89,6 +89,17 @@ def main():
 
     rclpy.init()
 
+    display_node = rclpy.create_node(
+        "gp8_trajectory_display"
+    )
+
+    display_publisher = display_node.create_publisher(
+        DisplayTrajectory,
+        "/move_group/display_planned_path",
+        10,
+    )
+
+
     try:
         moveit = MoveItPy(
             node_name="gp8_pose_goal",
@@ -96,15 +107,16 @@ def main():
         )
 
         arm = moveit.get_planning_component("arm")
+        time.sleep(1.0)
         arm.set_start_state_to_current_state()
 
         pose_goal = PoseStamped()
         pose_goal.header.frame_id = "base_link"
 
         # Example target pose. The orientation is expressed as xyzw.
-        pose_goal.pose.position.x = 0.510
-        pose_goal.pose.position.y = 0.000
-        pose_goal.pose.position.z = 0.715
+        pose_goal.pose.position.x = 0.350
+        pose_goal.pose.position.y = 0.200
+        pose_goal.pose.position.z = 0.800
 
         pose_goal.pose.orientation.x = 0.707
         pose_goal.pose.orientation.y = 0.000
@@ -121,6 +133,15 @@ def main():
 
         if plan_result:
             print("Planning succeeded.")
+
+            display_trajectory = DisplayTrajectory()
+            trajectory_msg = (plan_result.trajectory.get_robot_trajectory_msg())
+            display_trajectory.trajectory.append(trajectory_msg)
+
+            display_publisher.publish(display_trajectory)
+
+            print("Published planned trajectory to RViz.")
+            time.sleep(1.0)
 
             input("Press Enter to execute the planned motion...")
 
