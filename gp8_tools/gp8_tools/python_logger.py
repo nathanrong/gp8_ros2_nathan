@@ -34,7 +34,7 @@ class JointStateLogger(Node):
                     10
                 )
 
-        self.get_logger().info('Logging /joint_states to data/gp8_data_out.csv')
+        self.get_logger().info('Logging /joint_states to data/gp8_data_out.csv ...')
 
     def joint_state_callback(self, msg):
         positions = dict(zip(msg.name, msg.position))

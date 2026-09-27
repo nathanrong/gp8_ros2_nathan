@@ -26,6 +26,8 @@ class JointStatePlotter(Node):
             10
         )
 
+        self.get_logger().info('Plotting /joint_state position values...')
+
     def joint_state_callback(self, msg):
         curr_time = time.monotonic() - self.start_time
         positions = dict(zip(msg.name, msg.position))
