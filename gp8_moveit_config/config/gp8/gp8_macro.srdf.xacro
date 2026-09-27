@@ -21,7 +21,10 @@
             <group name="gripper" />
         </group>
 
-        <end_effector name="gripper" parent_link="tool0" group="gripper"/>
+        <end_effector name="gripper" 
+		parent_link="link_6_t"
+		parent_group="arm" 
+		group="gripper"/>
 
         <group_state name="home" group="arm">
             <joint name="$(arg prefix)joint_1_s" value="0"/>
