@@ -9,6 +9,11 @@ from moveit.planning import MoveItPy
 from moveit_configs_utils import MoveItConfigsBuilder
 from moveit_msgs.msg import DisplayTrajectory
 
+# Runs in VSC for now:
+# source /opt/ros/jazzy/setup.bash
+# source ~/ros2_ws/install/setup.bash
+# python3 ~/ros2_ws/src/gp8_ros2/gp8_tools/gp8_tools/pose_goal.py
+
 def main():
     # Build the complete MoveIt configuration.
     moveit_config = (

@@ -3,6 +3,8 @@ from pathlib import Path
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
+from tf2_ros import Buffer, TransformListener
+from rclpy.time import Time
 
 joint_order = ['joint_1_s', 'joint_2_l', 'joint_3_u', 
                 'joint_4_r', 'joint_5_b', 'joint_6_t']
@@ -10,6 +12,8 @@ joint_order = ['joint_1_s', 'joint_2_l', 'joint_3_u',
 class JointStateLogger(Node):
     def __init__(self):
         super().__init__('python_logger')
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
 
         self.first_timestamp = None
         output_directory = (Path.home()/'ros2_ws'/'src'/'gp8_ros2'/'data')
@@ -23,6 +27,16 @@ class JointStateLogger(Node):
             header.append(f'{joint_name}_position_rad')
         for joint_name in joint_order:
             header.append(f'{joint_name}_velocity_rad_s')
+
+        header += [
+            'tool0_x_m',
+            'tool0_y_m',
+            'tool0_z_m',
+            'tool0_qx',
+            'tool0_qy',
+            'tool0_qz',
+            'tool0_qw',
+        ]
 
         self.writer.writerow(header)
         self.file.flush()
@@ -49,6 +63,12 @@ class JointStateLogger(Node):
 
         timestamp = (msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9)
 
+        try:
+            tool_transform = self.tf_buffer.lookup_transform('base_link', 'tool0',
+                                                             Time.from_msg(msg.header.stamp))
+        except:
+            return
+
         if self.first_timestamp is None:
             self.first_timestamp = timestamp
 
@@ -60,11 +80,25 @@ class JointStateLogger(Node):
         for joint_name in joint_order:
             row.append(f'{velocities[joint_name]:.9f}')
 
+        translation = tool_transform.transform.translation
+        rotation = tool_transform.transform.rotation
+
+        row.extend([
+            f'{translation.x:.9f}',
+            f'{translation.y:.9f}',
+            f'{translation.z:.9f}',
+            f'{rotation.x:.9f}',
+            f'{rotation.y:.9f}',
+            f'{rotation.z:.9f}',
+            f'{rotation.w:.9f}',
+        ])
+
         self.writer.writerow(row)
         self.file.flush()
 
     def close_file(self):
-        self.close_file()
+        if not self.file.closed:
+            self.close_file()
 
 def main(args=None):
     rclpy.init(args=args)
