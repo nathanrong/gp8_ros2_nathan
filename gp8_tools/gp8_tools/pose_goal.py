@@ -15,6 +15,23 @@ from moveit_msgs.msg import DisplayTrajectory
 # python3 ~/ros2_ws/src/gp8_ros2/gp8_tools/gp8_tools/pose_goal.py
 
 def main():
+    # Define target pose (single or multi)
+    targets = [
+        {
+            "position": (0.450, 0.000, 0.750),
+            "orientation": (0.707, 0.000, 0.707, 0.000),
+        },
+        {
+            "position": (0.300, -0.150, 0.850),
+            "orientation": (0.707, 0.000, 0.707, 0.000),
+        },
+        {
+            "position": (0.400, 0.150, 0.700),
+            "orientation": (0.707, 0.000, 0.707, 0.000),
+        },
+    ]
+
+
     # Build the complete MoveIt configuration.
     moveit_config = (
         MoveItConfigsBuilder(
@@ -113,54 +130,72 @@ def main():
 
         arm = moveit.get_planning_component("arm")
         time.sleep(1.0)
-        arm.set_start_state_to_current_state()
+        if not targets:
+            raise ValueError("No pose targets were provided.")
 
-        pose_goal = PoseStamped()
-        pose_goal.header.frame_id = "base_link"
+        for target_index, target in enumerate(targets, start=1):
+            print(f"Planning target {target_index}/{len(targets)}")
 
-        # Example target pose. The orientation is expressed as xyzw.
-        pose_goal.pose.position.x = 0.350
-        pose_goal.pose.position.y = 0.200
-        pose_goal.pose.position.z = 0.800
+            # Allow the current joint state to update after the previous motion.
+            time.sleep(1.0)
+            arm.set_start_state_to_current_state()
 
-        pose_goal.pose.orientation.x = 0.707
-        pose_goal.pose.orientation.y = 0.000
-        pose_goal.pose.orientation.z = 0.707
-        pose_goal.pose.orientation.w = 0.000
+            pose_goal = PoseStamped()
+            pose_goal.header.frame_id = "base_link"
 
-        # tool0 is the fixed end-effector frame beyond the flange.
-        arm.set_goal_state(
-            pose_stamped_msg=pose_goal,
-            pose_link="tool0",
-        )
+            x, y, z = target["position"]
+            qx, qy, qz, qw = target["orientation"]
 
-        plan_result = arm.plan()
+            pose_goal.pose.position.x = x
+            pose_goal.pose.position.y = y
+            pose_goal.pose.position.z = z
 
-        if plan_result:
-            print("Planning succeeded.")
+            pose_goal.pose.orientation.x = qx
+            pose_goal.pose.orientation.y = qy
+            pose_goal.pose.orientation.z = qz
+            pose_goal.pose.orientation.w = qw
+
+            arm.set_goal_state(
+                pose_stamped_msg=pose_goal,
+                pose_link="tool0",
+            )
+
+            plan_result = arm.plan()
+
+            if not plan_result:
+                print(f"Planning failed for target {target_index}.")
+                return
+
+            print(f"Planning succeeded for target {target_index}.")
+
+            trajectory_msg = (
+                plan_result.trajectory.get_robot_trajectory_msg()
+            )
 
             display_trajectory = DisplayTrajectory()
-            trajectory_msg = (plan_result.trajectory.get_robot_trajectory_msg())
             display_trajectory.trajectory.append(trajectory_msg)
 
             display_publisher.publish(display_trajectory)
 
-            print("Published planned trajectory to RViz.")
+            print("Published trajectory to RViz.")
             time.sleep(1.0)
 
-            input("Press Enter to execute the planned motion...")
+            input(
+                f"Press Enter to execute target {target_index}, "
+                "or Ctrl+C to stop..."
+            )
 
             execution_result = moveit.execute(
                 plan_result.trajectory,
                 controllers=[],
             )
 
-            if execution_result:
-                print("Execution succeeded.")
-            else:
-                print("Execution failed.")
-        else:
-            print("Planning failed.")
+            if not execution_result:
+                print(f"Execution failed for target {target_index}.")
+                return
+
+            print(f"Execution succeeded for target {target_index}.")
+
 
 
     finally:
