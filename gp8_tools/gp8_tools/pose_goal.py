@@ -1,6 +1,7 @@
 
 from pathlib import Path
 import time
+import math
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseStamped
@@ -8,15 +9,65 @@ from launch_param_builder import load_yaml
 from moveit.planning import MoveItPy
 from moveit_configs_utils import MoveItConfigsBuilder
 from moveit_msgs.msg import DisplayTrajectory
+from moveit.core.robot_state import RobotState
 
 # Runs in VSC for now:
 # source /opt/ros/jazzy/setup.bash
 # source ~/ros2_ws/install/setup.bash
 # python3 ~/ros2_ws/src/gp8_ros2/gp8_tools/gp8_tools/pose_goal.py
 
+def make_pose_goal(target):
+    # Make tool0 pose goal for a given target
+    pose_goal = PoseStamped()
+    pose_goal.header.frame_id = "base_link"
+
+    x, y, z = target["position"]
+    qx, qy, qz, qw = target["orientation"]
+
+    pose_goal.pose.position.x = x
+    pose_goal.pose.position.y = y
+    pose_goal.pose.position.z = z
+    pose_goal.pose.orientation.x = qx
+    pose_goal.pose.orientation.y = qy
+    pose_goal.pose.orientation.z = qz
+    pose_goal.pose.orientation.w = qw
+
+    return pose_goal
+
+def publish_trajectory(display_publisher, plan_result):
+    # Publish trajectory to Rviz/MoveIt for visualization
+    trajectory_msg = plan_result.trajectory.get_robot_trajectory_msg()
+    display_trajectory = DisplayTrajectory()
+    display_trajectory.trajectory.append(trajectory_msg)
+    display_publisher.publish(display_trajectory)
+
 def main():
+    ## GLOBALS ##
+
+    interactive_mode = False
+
+    # PTP similar to MOVJ
+    # LIN imilar to MOVL
+    move_mode = "PTP"
+
+    velocity_scale = 0.5 # Multiple of speed
+    accel_scale = 0.5
+    state_update_wait = 1
+    rviz_display_wait = 1
+    waypoint_pause = 0.5
+
+    ## GLOBALS ##
+
+    move_mode = move_mode.upper()
+    if move_mode not in {"PTP", "LIN"}:
+        raise ValueError("Incorrect mode selected...")
+
     # Define target pose (single or multi)
     targets = [
+        # {
+        #     "position": (0.3055, 0.0966, 0.8535),
+        #     "orientation": (0.707, 0.000, 0.707, 0.000),
+        # },
         {
             "position": (0.450, 0.000, 0.750),
             "orientation": (0.707, 0.000, 0.707, 0.000),
@@ -31,7 +82,25 @@ def main():
         },
     ]
 
+    # Joint positions in radians
+    safe_state = {
+        "joint_1_s": 0.0,
+        "joint_2_l": 0.0,
+        "joint_3_u": 0.0,
+        "joint_4_r": 0.0,
+        "joint_5_b": -math.pi/2,
+        "joint_6_t": 0.0,
+    }
 
+    home_state = {
+            "joint_1_s": 0.0,
+            "joint_2_l": 0.0,
+            "joint_3_u": 0.0,
+            "joint_4_r": 0.0,
+            "joint_5_b": 0.0,
+            "joint_6_t": 0.0,
+        }
+    
     # Build the complete MoveIt configuration.
     moveit_config = (
         MoveItConfigsBuilder(
@@ -76,9 +145,7 @@ def main():
         / "pilz_industrial_motion_planner_planning.yaml"
     )
 
-    config_dict["pilz_industrial_motion_planner"] = load_yaml(
-        pilz_path
-    )
+    config_dict["pilz_industrial_motion_planner"] = load_yaml(pilz_path)
 
     pipeline_names = config_dict["planning_pipelines"]
     config_dict["planning_pipelines"] = {
@@ -90,8 +157,8 @@ def main():
         "planning_pipeline": "ompl",
         "planning_time": 5.0,
         "planning_attempts": 10,
-        "max_velocity_scaling_factor": 0.5,
-        "max_acceleration_scaling_factor": 0.5,
+        "max_velocity_scaling_factor": velocity_scale,
+        "max_acceleration_scaling_factor": accel_scale,
     }
 
     config_dict["use_sim_time"] = True
@@ -102,7 +169,7 @@ def main():
         "qos_overrides./clock.subscription.depth": 1,
     })
 
-
+    print(f"Motion Mode: {move_mode}")
     print("Planning pipelines:", config_dict["planning_pipelines"])
     print(
         "Pilz configuration loaded:",
@@ -110,17 +177,12 @@ def main():
     )
 
     rclpy.init()
-
-    display_node = rclpy.create_node(
-        "gp8_trajectory_display"
-    )
-
+    display_node = rclpy.create_node("gp8_trajectory_display")
     display_publisher = display_node.create_publisher(
         DisplayTrajectory,
         "/move_group/display_planned_path",
         10,
     )
-
 
     try:
         moveit = MoveItPy(
@@ -129,7 +191,7 @@ def main():
         )
 
         arm = moveit.get_planning_component("arm")
-        time.sleep(1.0)
+
         if not targets:
             raise ValueError("No pose targets were provided.")
 
@@ -137,27 +199,11 @@ def main():
             print(f"Planning target {target_index}/{len(targets)}")
 
             # Allow the current joint state to update after the previous motion.
-            time.sleep(1.0)
+            time.sleep(state_update_wait)
             arm.set_start_state_to_current_state()
-
-            pose_goal = PoseStamped()
-            pose_goal.header.frame_id = "base_link"
-
-            x, y, z = target["position"]
-            qx, qy, qz, qw = target["orientation"]
-
-            pose_goal.pose.position.x = x
-            pose_goal.pose.position.y = y
-            pose_goal.pose.position.z = z
-
-            pose_goal.pose.orientation.x = qx
-            pose_goal.pose.orientation.y = qy
-            pose_goal.pose.orientation.z = qz
-            pose_goal.pose.orientation.w = qw
-
             arm.set_goal_state(
-                pose_stamped_msg=pose_goal,
-                pose_link="tool0",
+                pose_stamped_msg = make_pose_goal(target),
+                pose_link = "tool0",
             )
 
             plan_result = arm.plan()
@@ -168,22 +214,15 @@ def main():
 
             print(f"Planning succeeded for target {target_index}.")
 
-            trajectory_msg = (
-                plan_result.trajectory.get_robot_trajectory_msg()
-            )
-
-            display_trajectory = DisplayTrajectory()
-            display_trajectory.trajectory.append(trajectory_msg)
-
-            display_publisher.publish(display_trajectory)
-
+            publish_trajectory(display_publisher, plan_result)
             print("Published trajectory to RViz.")
-            time.sleep(1.0)
+            time.sleep(rviz_display_wait)
 
-            input(
-                f"Press Enter to execute target {target_index}, "
-                "or Ctrl+C to stop..."
-            )
+            if interactive_mode:
+                input(
+                    f"Press Enter to execute target {target_index}, "
+                    "or Ctrl+C to stop..."
+                )
 
             execution_result = moveit.execute(
                 plan_result.trajectory,
@@ -196,9 +235,50 @@ def main():
 
             print(f"Execution succeeded for target {target_index}.")
 
+        command = input(
+            "Wapoint sequence complete. "
+            "Enter 's' for safe position, 'r' to return to rest, " 
+            "or Enter to finish: "
+        ).strip().lower()
 
+        if command in {"s", "r"}:
+            if command == "r":
+                target_name = "rest position"
+                target_joints = home_state
+            elif command == "s":
+                target_name = "safe position"
+                target_joints = safe_state
+
+            print(f"Returning to {target_name}...")
+            time.sleep(state_update_wait)
+            arm.set_start_state_to_current_state()
+
+            target_state = RobotState(moveit.get_robot_model())
+            target_state.joint_positions = target_joints
+            arm.set_goal_state(robot_state = target_state)
+
+            target_plan = arm.plan()
+            if not target_plan:
+                print(f"Planning failed for {target_name}...")
+                return
+
+            print(f"Planning to {target_name} succeeded.")
+            publish_trajectory(display_publisher, target_plan)
+            time.sleep(waypoint_pause)
+            if interactive_mode:
+                input(f"Press Enter to execute the {target_name} motion...")
+
+            target_execition_result = moveit.execute(
+                target_plan.trajectory,
+                controllers = [],
+            )
+            if target_execition_result:
+                print(f"Execution to {target_name} succeeded.")
+            else:
+                print(f"Execution to {target_name} failed.")
 
     finally:
+        display_node.destroy_node()
         rclpy.shutdown()
 
 
