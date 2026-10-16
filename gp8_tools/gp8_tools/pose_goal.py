@@ -1,17 +1,19 @@
 
 from pathlib import Path
+import subprocess
 import time
 import math
 import rclpy
 from rclpy.action import ActionClient
 from control_msgs.action import GripperCommand
 from ament_index_python.packages import get_package_share_directory
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import Pose, PoseStamped
 from launch_param_builder import load_yaml
 from moveit.planning import MoveItPy
 from moveit_configs_utils import MoveItConfigsBuilder
-from moveit_msgs.msg import DisplayTrajectory
+from moveit_msgs.msg import DisplayTrajectory, CollisionObject
 from moveit.core.robot_state import RobotState
+from shape_msgs.msg import SolidPrimitive
 
 # Runs in VSC for now:
 # source /opt/ros/jazzy/setup.bash
@@ -46,7 +48,7 @@ def execute_pose_targets(
     rviz_display_wait,
     interactive_mode,
 ):
-    """Plan and execute the tool0 target sequence."""
+    # Plan and execute the tool0 target sequence
 
     if not targets:
         print("No pose targets were provided.")
@@ -106,7 +108,7 @@ def move_to_joint_state(
     state_update_wait,
     waypoint_pause,
 ):
-    """Plan and execute a named joint-space position."""
+    # Plan and execute a joint trajectory
 
     print(f"Planning to {state_name}...")
 
@@ -183,6 +185,114 @@ def command_gripper(node, gripper_client, position, max_effort=10.0):
     )
     return result.reached_goal
 
+def add_box_to_planning_scene(moveit, box_name, box_size, box_position):
+    # Add box to MoveIt planning scene
+    planning_scene_monitor = moveit.get_planning_scene_monitor()
+
+    collision_object = CollisionObject()
+    collision_object.header.frame_id = "base_link"
+    collision_object.id = box_name
+
+    box = SolidPrimitive()
+    box.type = SolidPrimitive.BOX
+    box.dimensions = list(box_size)
+
+    box_pose = Pose()
+    box_pose.orientation.w = 1.0
+
+    # box Gazebo position
+    box_pose.position.x = box_position[0]
+    box_pose.position.y = box_position[1]
+    box_pose.position.z = box_position[2]
+
+    collision_object.primitives.append(box)
+    collision_object.primitive_poses.append(box_pose)
+    collision_object.operation = CollisionObject.ADD
+
+    with planning_scene_monitor.read_write() as scene:
+        scene.apply_collision_object(collision_object)
+        scene.current_state.update()
+
+    print("Added pick_box to the MoveIt planning scene.")
+
+def spawn_box_in_gazebo(node, box_name, box_sdf_path, box_position):
+    # Spawn the box into Gazebo
+    x, y, z = box_position
+    
+    command = [
+        "ros2", "run", "ros_gz_sim", "create", "--world", "default",
+        "--file", str(box_sdf_path), "--name", box_name,
+        "-x", str(x), "-y", str(y), "-z", str(z),
+    ]
+
+    node.get_logger().info("Spawning box in Gazebo...")
+
+    # Eventually replace subprocess with ROS service client
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+        )
+    except subprocess.TimeoutExpired:
+        node.get_logger().error("Timed out while spawning the box.")
+        return False
+
+    if result.returncode != 0:
+        node.get_logger().error(f"Gazebo failed to spawn the box:\n{result.stderr}")
+        return False
+
+    node.get_logger().info(f"Gazebo box spawned successfully:\n{result.stdout.strip()}")
+    return True
+
+def pick_object(moveit, arm, display_publisher, display_node, gripper_client,
+    object_data, state_update_wait, rviz_display_wait, interactive_mode, gripper_max_effort):
+    # Define box pick up
+    
+    if not command_gripper(
+        display_node,
+        gripper_client,
+        0.000,
+        gripper_max_effort,
+    ):
+        return False
+
+    if not execute_pose_targets(
+        moveit,
+        arm,
+        display_publisher,
+        [object_data["approach_pose"]],
+        "PTP",
+        state_update_wait,
+        rviz_display_wait,
+        interactive_mode,
+    ):
+        return False
+
+    if not execute_pose_targets(
+        moveit,
+        arm,
+        display_publisher,
+        [object_data["grasp_pose"]],
+        "PTP",
+        state_update_wait,
+        rviz_display_wait,
+        interactive_mode,
+    ):
+        return False
+
+    if not command_gripper(
+        display_node,
+        gripper_client,
+        object_data["gripper_position"],
+        gripper_max_effort,
+    ):
+        return False
+
+    print("Grasp sequence complete.")
+    return True
+
 def main():
     ## GLOBALS ##
 
@@ -203,12 +313,28 @@ def main():
     gripper_close = 0.031
     gripper_max_effort = 10.0
 
+    # Box dimensions
+    box_name = "pick_box"
+    box_sdf_path = (
+        Path.home()
+        / "ros2_ws"
+        / "src"
+        / "gp8_ros2"
+        / "gp8_gazebo"
+        / "models"
+        / "box"
+        / "box.sdf"
+    )
+    box_size = (0.05, 0.05, 0.05)
+    box_position = (0.40, 0.00, 0.025)
+
     ## GLOBALS ##
 
     move_mode = move_mode.upper()
     if move_mode not in {"PTP", "LIN"}:
         raise ValueError("Incorrect mode selected...")
 
+    ## TEMPORARY VALUES
     # Define target pose (single or multi)
     targets = [
         # {
@@ -228,6 +354,22 @@ def main():
             "orientation": (0.707, 0.000, 0.707, 0.000),
         },
     ]
+
+    box_1 = {
+        "approach_pose": {
+            "position": (0.40, 0.00, 0.20),
+            "orientation": (1.000, 0.000, 0.000, 0.000),
+        },
+        "grasp_pose": {
+            "position": (0.40, 0.00, 0.10),
+            "orientation": (1.000, 0.000, 0.000, 0.000),
+        },
+        "lift_pose": {
+            "position": (0.40, 0.00, 0.20),
+            "orientation": (1.000, 0.000, 0.000, 0.000),
+        },
+        "gripper_position": 0.031,
+    }
 
     # Joint positions in radians
     safe_state = {
@@ -350,6 +492,8 @@ def main():
             print("c = close gripper")
             print("s = move to safe position")
             print("r = move to rest position")
+            print("b = add box to scene")
+            print("p = pick up box")
             print("Enter = exit")
             print("--------------------------------------")
 
@@ -407,6 +551,28 @@ def main():
                     state_name="rest position",
                     state_update_wait=state_update_wait,
                     waypoint_pause=waypoint_pause,
+                )
+
+            elif command == "b":
+                box_spawn = spawn_box_in_gazebo(display_node, box_name, box_sdf_path, box_position)
+                if box_spawn:
+                    add_box_to_planning_scene(moveit, box_name, box_size, box_position)
+                    print("Box added to Gazebo and Moveit...")
+                else:
+                    print("Box failed to spawn into Gazebo and was not added to MoveIt...")
+
+            elif command == "p":
+                pick_object(
+                    moveit=moveit,
+                    arm=arm,
+                    display_publisher=display_publisher,
+                    display_node=display_node,
+                    gripper_client=gripper_client,
+                    object_data=box_1,
+                    state_update_wait=state_update_wait,
+                    rviz_display_wait=rviz_display_wait,
+                    interactive_mode=interactive_mode,
+                    gripper_max_effort=gripper_max_effort,
                 )
 
             else:
