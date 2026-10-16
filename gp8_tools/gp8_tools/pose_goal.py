@@ -143,6 +143,7 @@ def move_to_joint_state(
 
 def publish_trajectory(display_publisher, plan_result):
     # Publish trajectory to Rviz/MoveIt for visualization
+    # Note: Rviz is NOT required for the sim to work
     trajectory_msg = plan_result.trajectory.get_robot_trajectory_msg()
     display_trajectory = DisplayTrajectory()
     display_trajectory.trajectory.append(trajectory_msg)
