@@ -3,6 +3,8 @@ from pathlib import Path
 import time
 import math
 import rclpy
+from rclpy.action import ActionClient
+from control_msgs.action import GripperCommand
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseStamped
 from launch_param_builder import load_yaml
@@ -41,6 +43,40 @@ def publish_trajectory(display_publisher, plan_result):
     display_trajectory.trajectory.append(trajectory_msg)
     display_publisher.publish(display_trajectory)
 
+def command_gripper(node, gripper_client, position, max_effort=10.0):
+    # Command the gripper and wait for action result. 
+    # Gripper takes two floats: position and max effort
+    # Position: 0.000 = open, 0.031 = closed
+    if not gripper_client.wait_for_server(timeout_sec=5.0):
+        node.get_logger().error("Gripper action server not availiable...")
+        return False
+
+    goal = GripperCommand.Goal()
+    goal.command.position = position
+    goal.command.max_effort = max_effort
+
+    node.get_logger().info(f"Commanding gripper to position {position:.3f} m")
+
+    goal_future = gripper_client.send_goal_async(goal)
+    rclpy.spin_until_future_complete(node, goal_future)
+    goal_handle = goal_future.result()
+
+    if not goal_handle.accepted:
+        node.get_logger().error("Gripper command was rejected...")
+        return False
+
+    result_future = goal_handle.get_result_async()
+    rclpy.spin_until_future_complete(node, result_future)
+    result = result_future.result().result
+
+    node.get_logger().info(
+        f"Gripper result: position = {result.position:.3f} m, "
+        f"effort = {result.effort:.3f} N, "
+        f"reached_goal = {result.reached_goal}, "
+        f"stalled = {result.stalled}"
+    )
+    return result.reached_goal
+
 def main():
     ## GLOBALS ##
 
@@ -55,6 +91,11 @@ def main():
     state_update_wait = 1
     rviz_display_wait = 1
     waypoint_pause = 0.5
+
+    # Gripper positions
+    gripper_open = 0.000
+    gripper_close = 0.031
+    gripper_max_effort = 10.0
 
     ## GLOBALS ##
 
@@ -184,6 +225,10 @@ def main():
         10,
     )
 
+    # Create action client for gripper
+    gripper_client = ActionClient(display_node, GripperCommand, 
+                                  "/gripper_action_controller/gripper_cmd")
+
     try:
         moveit = MoveItPy(
             node_name="gp8_pose_goal",
@@ -235,47 +280,74 @@ def main():
 
             print(f"Execution succeeded for target {target_index}.")
 
-        command = input(
-            "Wapoint sequence complete. "
-            "Enter 's' for safe position, 'r' to return to rest, " 
-            "or Enter to finish: "
-        ).strip().lower()
+            command = input(
+                "\nEnter command:\n"
+                "  o = open gripper\n"
+                "  c = close gripper\n"
+                "  s = safe position\n"
+                "  r = rest position\n"
+                "  Enter = finish\n"
+                "Command: "
+            ).strip().lower()
 
-        if command in {"s", "r"}:
-            if command == "r":
-                target_name = "rest position"
-                target_joints = home_state
-            elif command == "s":
-                target_name = "safe position"
-                target_joints = safe_state
+            if command == "o":
+                command_gripper(
+                    display_node,
+                    gripper_client,
+                    gripper_open,
+                    gripper_max_effort,
+                )
 
-            print(f"Returning to {target_name}...")
-            time.sleep(state_update_wait)
-            arm.set_start_state_to_current_state()
+            elif command == "c":
+                command_gripper(
+                    display_node,
+                    gripper_client,
+                    gripper_close,
+                    gripper_max_effort,
+                )
 
-            target_state = RobotState(moveit.get_robot_model())
-            target_state.joint_positions = target_joints
-            arm.set_goal_state(robot_state = target_state)
+            elif command in {"s", "r"}:
+                if command == "r":
+                    target_name = "rest position"
+                    target_joints = home_state
+                else:
+                    target_name = "safe position"
+                    target_joints = safe_state
 
-            target_plan = arm.plan()
-            if not target_plan:
-                print(f"Planning failed for {target_name}...")
-                return
+                print(f"Returning to {target_name}...")
+                time.sleep(state_update_wait)
 
-            print(f"Planning to {target_name} succeeded.")
-            publish_trajectory(display_publisher, target_plan)
-            time.sleep(waypoint_pause)
-            if interactive_mode:
-                input(f"Press Enter to execute the {target_name} motion...")
+                arm.set_start_state_to_current_state()
 
-            target_execition_result = moveit.execute(
-                target_plan.trajectory,
-                controllers = [],
-            )
-            if target_execition_result:
-                print(f"Execution to {target_name} succeeded.")
+                target_state = RobotState(moveit.get_robot_model())
+                target_state.joint_positions = target_joints
+                arm.set_goal_state(robot_state=target_state)
+
+                target_plan = arm.plan()
+
+                if not target_plan:
+                    print(f"Planning failed for {target_name}.")
+                    return
+
+                print(f"Planning to {target_name} succeeded.")
+                publish_trajectory(display_publisher, target_plan)
+                time.sleep(waypoint_pause)
+
+                target_execution_result = moveit.execute(
+                    target_plan.trajectory,
+                    controllers=[],
+                )
+
+                if target_execution_result:
+                    print(f"Execution to {target_name} succeeded.")
+                else:
+                    print(f"Execution to {target_name} failed.")
+
+            elif command == "":
+                print("Finished.")
+
             else:
-                print(f"Execution to {target_name} failed.")
+                print("Unknown command.")
 
     finally:
         display_node.destroy_node()
