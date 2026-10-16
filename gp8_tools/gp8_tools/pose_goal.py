@@ -36,6 +36,111 @@ def make_pose_goal(target):
 
     return pose_goal
 
+def execute_pose_targets(
+    moveit,
+    arm,
+    display_publisher,
+    targets,
+    move_mode,
+    state_update_wait,
+    rviz_display_wait,
+    interactive_mode,
+):
+    """Plan and execute the tool0 target sequence."""
+
+    if not targets:
+        print("No pose targets were provided.")
+        return False
+
+    print(f"Executing {len(targets)} tool0 targets...")
+
+    for target_index, target in enumerate(targets, start=1):
+        print(f"Planning target {target_index}/{len(targets)}")
+
+        time.sleep(state_update_wait)
+
+        arm.set_start_state_to_current_state()
+        arm.set_goal_state(
+            pose_stamped_msg=make_pose_goal(target),
+            pose_link="tool0",
+        )
+
+        plan_result = arm.plan()
+
+        if not plan_result:
+            print(f"Planning failed for target {target_index}.")
+            return False
+
+        print(f"Planning succeeded for target {target_index}.")
+
+        publish_trajectory(display_publisher, plan_result)
+        print("Published trajectory to RViz.")
+        time.sleep(rviz_display_wait)
+
+        if interactive_mode:
+            input(
+                f"Press Enter to execute target {target_index}, "
+                "or Ctrl+C to stop..."
+            )
+
+        execution_result = moveit.execute(
+            plan_result.trajectory,
+            controllers=[],
+        )
+
+        if not execution_result:
+            print(f"Execution failed for target {target_index}.")
+            return False
+
+        print(f"Execution succeeded for target {target_index}.")
+
+    print("Tool0 target sequence complete.")
+    return True
+
+def move_to_joint_state(
+    moveit,
+    arm,
+    display_publisher,
+    joint_positions,
+    state_name,
+    state_update_wait,
+    waypoint_pause,
+):
+    """Plan and execute a named joint-space position."""
+
+    print(f"Planning to {state_name}...")
+
+    time.sleep(state_update_wait)
+    arm.set_start_state_to_current_state()
+
+    target_state = RobotState(moveit.get_robot_model())
+    target_state.joint_positions = joint_positions
+
+    arm.set_goal_state(robot_state=target_state)
+
+    plan_result = arm.plan()
+
+    if not plan_result:
+        print(f"Planning failed for {state_name}.")
+        return False
+
+    print(f"Planning to {state_name} succeeded.")
+
+    publish_trajectory(display_publisher, plan_result)
+    time.sleep(waypoint_pause)
+
+    execution_result = moveit.execute(
+        plan_result.trajectory,
+        controllers=[],
+    )
+
+    if execution_result:
+        print(f"Execution to {state_name} succeeded.")
+        return True
+
+    print(f"Execution to {state_name} failed.")
+    return False
+
 def publish_trajectory(display_publisher, plan_result):
     # Publish trajectory to Rviz/MoveIt for visualization
     trajectory_msg = plan_result.trajectory.get_robot_trajectory_msg()
@@ -237,60 +342,35 @@ def main():
 
         arm = moveit.get_planning_component("arm")
 
-        if not targets:
-            raise ValueError("No pose targets were provided.")
+        while True:
+            print("\n---------- GP8 CONTROL MENU ----------")
+            print("z = execute tool0 target sequence")
+            print("o = open gripper")
+            print("c = close gripper")
+            print("s = move to safe position")
+            print("r = move to rest position")
+            print("Enter = exit")
+            print("--------------------------------------")
 
-        for target_index, target in enumerate(targets, start=1):
-            print(f"Planning target {target_index}/{len(targets)}")
+            command = input("Command: ").strip().lower()
 
-            # Allow the current joint state to update after the previous motion.
-            time.sleep(state_update_wait)
-            arm.set_start_state_to_current_state()
-            arm.set_goal_state(
-                pose_stamped_msg = make_pose_goal(target),
-                pose_link = "tool0",
-            )
+            if command == "":
+                print("Closing GP8 control script.")
+                break
 
-            plan_result = arm.plan()
-
-            if not plan_result:
-                print(f"Planning failed for target {target_index}.")
-                return
-
-            print(f"Planning succeeded for target {target_index}.")
-
-            publish_trajectory(display_publisher, plan_result)
-            print("Published trajectory to RViz.")
-            time.sleep(rviz_display_wait)
-
-            if interactive_mode:
-                input(
-                    f"Press Enter to execute target {target_index}, "
-                    "or Ctrl+C to stop..."
+            elif command == "z":
+                execute_pose_targets(
+                    moveit=moveit,
+                    arm=arm,
+                    display_publisher=display_publisher,
+                    targets=targets,
+                    move_mode=move_mode,
+                    state_update_wait=state_update_wait,
+                    rviz_display_wait=rviz_display_wait,
+                    interactive_mode=interactive_mode,
                 )
 
-            execution_result = moveit.execute(
-                plan_result.trajectory,
-                controllers=[],
-            )
-
-            if not execution_result:
-                print(f"Execution failed for target {target_index}.")
-                return
-
-            print(f"Execution succeeded for target {target_index}.")
-
-            command = input(
-                "\nEnter command:\n"
-                "  o = open gripper\n"
-                "  c = close gripper\n"
-                "  s = safe position\n"
-                "  r = rest position\n"
-                "  Enter = finish\n"
-                "Command: "
-            ).strip().lower()
-
-            if command == "o":
+            elif command == "o":
                 command_gripper(
                     display_node,
                     gripper_client,
@@ -306,48 +386,31 @@ def main():
                     gripper_max_effort,
                 )
 
-            elif command in {"s", "r"}:
-                if command == "r":
-                    target_name = "rest position"
-                    target_joints = home_state
-                else:
-                    target_name = "safe position"
-                    target_joints = safe_state
-
-                print(f"Returning to {target_name}...")
-                time.sleep(state_update_wait)
-
-                arm.set_start_state_to_current_state()
-
-                target_state = RobotState(moveit.get_robot_model())
-                target_state.joint_positions = target_joints
-                arm.set_goal_state(robot_state=target_state)
-
-                target_plan = arm.plan()
-
-                if not target_plan:
-                    print(f"Planning failed for {target_name}.")
-                    return
-
-                print(f"Planning to {target_name} succeeded.")
-                publish_trajectory(display_publisher, target_plan)
-                time.sleep(waypoint_pause)
-
-                target_execution_result = moveit.execute(
-                    target_plan.trajectory,
-                    controllers=[],
+            elif command == "s":
+                move_to_joint_state(
+                    moveit=moveit,
+                    arm=arm,
+                    display_publisher=display_publisher,
+                    joint_positions=safe_state,
+                    state_name="safe position",
+                    state_update_wait=state_update_wait,
+                    waypoint_pause=waypoint_pause,
                 )
 
-                if target_execution_result:
-                    print(f"Execution to {target_name} succeeded.")
-                else:
-                    print(f"Execution to {target_name} failed.")
-
-            elif command == "":
-                print("Finished.")
+            elif command == "r":
+                move_to_joint_state(
+                    moveit=moveit,
+                    arm=arm,
+                    display_publisher=display_publisher,
+                    joint_positions=home_state,
+                    state_name="rest position",
+                    state_update_wait=state_update_wait,
+                    waypoint_pause=waypoint_pause,
+                )
 
             else:
-                print("Unknown command.")
+                print(f"Unknown command: '{command}'")
+
 
     finally:
         display_node.destroy_node()
