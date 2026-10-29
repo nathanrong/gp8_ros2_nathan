@@ -11,7 +11,7 @@ from geometry_msgs.msg import Pose, PoseStamped
 from launch_param_builder import load_yaml
 from moveit.planning import MoveItPy
 from moveit_configs_utils import MoveItConfigsBuilder
-from moveit_msgs.msg import DisplayTrajectory, CollisionObject
+from moveit_msgs.msg import DisplayTrajectory, CollisionObject, AttachedCollisionObject
 from moveit.core.robot_state import RobotState
 from shape_msgs.msg import SolidPrimitive
 
@@ -183,7 +183,7 @@ def command_gripper(node, gripper_client, position, max_effort=10.0):
         f"reached_goal = {result.reached_goal}, "
         f"stalled = {result.stalled}"
     )
-    return result.reached_goal
+    return result.reached_goal or result.stalled
 
 def add_box_to_planning_scene(moveit, box_name, box_size, box_position):
     # Add box to MoveIt planning scene
@@ -209,11 +209,72 @@ def add_box_to_planning_scene(moveit, box_name, box_size, box_position):
     collision_object.primitive_poses.append(box_pose)
     collision_object.operation = CollisionObject.ADD
 
-    with planning_scene_monitor.read_write() as scene:
-        scene.apply_collision_object(collision_object)
-        scene.current_state.update()
+    planning_scene_monitor.process_collision_object(collision_object)
 
     print("Added pick_box to the MoveIt planning scene.")
+
+def attach_box_to_robot(
+    # Temporary idea: attach box to robot
+    # This allows moveit to ignore collision
+    # preventing OMPL from rejecting plan
+    moveit,
+    box_name,
+    box_size, box_position, robot_link="tool0"):
+    planning_scene_monitor = moveit.get_planning_scene_monitor()
+
+    attached_object = AttachedCollisionObject()
+    attached_object.link_name = robot_link
+
+    attached_object.object.header.frame_id = "base_link"
+    attached_object.object.id = box_name
+    attached_object.object.operation = CollisionObject.ADD
+
+    box = SolidPrimitive()
+    box.type = SolidPrimitive.BOX
+    box.dimensions = list(box_size)
+
+    box_pose = Pose()
+    box_pose.orientation.w = 1.0
+    box_pose.position.x = box_position[0]
+    box_pose.position.y = box_position[1]
+    box_pose.position.z = box_position[2]
+
+    attached_object.object.primitives.append(box)
+    attached_object.object.primitive_poses.append(box_pose)
+
+    attached_object.touch_links = [
+        "tool0",
+        "gripper_base",
+        "gripper_right",
+        "gripper_left",
+    ]
+
+    planning_scene_monitor.process_attached_collision_object(attached_object)
+
+    print(f"Attached {box_name} to {robot_link} in MoveIt.")
+
+def allow_box_collision(moveit, box_name):
+    planning_scene_monitor = moveit.get_planning_scene_monitor()
+
+    finger_links = [
+        "gripper_right",
+        "gripper_left",
+    ]
+
+    with planning_scene_monitor.read_write() as scene:
+        acm = scene.allowed_collision_matrix
+
+        for finger_link in finger_links:
+            acm.set_entry(
+                box_name,
+                finger_link,
+                True,
+            )
+
+        scene.allowed_collision_matrix = acm
+        scene.current_state.update()
+
+    print(f"Allowed {box_name} contact with gripper fingers.")
 
 def spawn_box_in_gazebo(node, box_name, box_sdf_path, box_position):
     # Spawn the box into Gazebo
@@ -258,6 +319,7 @@ def pick_object(moveit, arm, display_publisher, display_node, gripper_client,
     ):
         return False
 
+    print("Planning approach pose...")
     if not execute_pose_targets(
         moveit,
         arm,
@@ -270,6 +332,9 @@ def pick_object(moveit, arm, display_publisher, display_node, gripper_client,
     ):
         return False
 
+    allow_box_collision(moveit = moveit, box_name = object_data["box_name"])
+
+    print("Planning grasp pose...")
     if not execute_pose_targets(
         moveit,
         arm,
@@ -282,6 +347,7 @@ def pick_object(moveit, arm, display_publisher, display_node, gripper_client,
     ):
         return False
 
+    print("Planning gripper close...")
     if not command_gripper(
         display_node,
         gripper_client,
@@ -290,7 +356,36 @@ def pick_object(moveit, arm, display_publisher, display_node, gripper_client,
     ):
         return False
 
-    print("Grasp sequence complete.")
+    print("Gripper closed successfully.")
+
+    # Allow joint states and the gripper action to update.
+    time.sleep(0.5)
+
+    # Tell MoveIt that the box is now intentionally inside the gripper.
+    attach_box_to_robot(
+        moveit = moveit,
+        box_name = object_data["box_name"],
+        box_size = object_data["box_size"],
+        box_position = object_data["box_position"],
+        robot_link="tool0",
+    )
+
+    print("Planning lift pose...")
+    # Plan and execute the lift.
+    if not execute_pose_targets(
+        moveit,
+        arm,
+        display_publisher,
+        [object_data["lift_pose"]],
+        "PTP",
+        state_update_wait,
+        rviz_display_wait,
+        interactive_mode,
+    ):
+        print("Lift planning failed.")
+        return False
+
+    print("Grasp and lift sequence complete.")
     return True
 
 def main():
@@ -325,8 +420,8 @@ def main():
         / "box"
         / "box.sdf"
     )
-    box_size = (0.05, 0.05, 0.05)
-    box_position = (0.40, 0.00, 0.025)
+    box_size = (0.02, 0.02, 0.02)
+    box_position = (0.40, 0.00, 0.01)
 
     ## GLOBALS ##
 
@@ -342,26 +437,29 @@ def main():
         #     "orientation": (0.707, 0.000, 0.707, 0.000),
         # },
         {
-            "position": (0.450, 0.000, 0.750),
-            "orientation": (0.707, 0.000, 0.707, 0.000),
+            "position": (0.46, 0.000, 0.715),
+            "orientation": (0.70711, 0.000, 0.70711, 0.000),
         },
         {
-            "position": (0.300, -0.150, 0.850),
-            "orientation": (0.707, 0.000, 0.707, 0.000),
+            "position": (0.39265, 0.065584, 0.788641),
+            "orientation": (0.63792, 0.26147, 0.70011, 0.18585),
         },
         {
-            "position": (0.400, 0.150, 0.700),
-            "orientation": (0.707, 0.000, 0.707, 0.000),
+            "position": (0.305469, 0.096623, 0.853482),
+            "orientation": (0.49716, 0.43416, 0.64352, 0.38759),
         },
     ]
 
     box_1 = {
+        "box_name": box_name,
+        "box_size": box_size,
+        "box_position": box_position,
         "approach_pose": {
             "position": (0.40, 0.00, 0.20),
             "orientation": (1.000, 0.000, 0.000, 0.000),
         },
         "grasp_pose": {
-            "position": (0.40, 0.00, 0.10),
+            "position": (0.40, 0.00, 0.06),
             "orientation": (1.000, 0.000, 0.000, 0.000),
         },
         "lift_pose": {
