@@ -47,14 +47,16 @@ def execute_pose_targets(
     state_update_wait,
     rviz_display_wait,
     interactive_mode,
+    pose_link = "tool0",
 ):
     # Plan and execute the tool0 target sequence
+    # tool0 default pose goal, can replace with other joints/gripper
 
     if not targets:
         print("No pose targets were provided.")
         return False
 
-    print(f"Executing {len(targets)} tool0 targets...")
+    print(f"Executing {len(targets)} targets using {pose_link}...")
 
     for target_index, target in enumerate(targets, start=1):
         print(f"Planning target {target_index}/{len(targets)}")
@@ -64,7 +66,7 @@ def execute_pose_targets(
         arm.set_start_state_to_current_state()
         arm.set_goal_state(
             pose_stamped_msg=make_pose_goal(target),
-            pose_link="tool0",
+            pose_link=pose_link,
         )
 
         plan_result = arm.plan()
@@ -183,7 +185,7 @@ def command_gripper(node, gripper_client, position, max_effort=10.0):
         f"reached_goal = {result.reached_goal}, "
         f"stalled = {result.stalled}"
     )
-    return result.reached_goal or result.stalled
+    return result.reached_goal
 
 def add_box_to_planning_scene(moveit, box_name, box_size, box_position):
     # Add box to MoveIt planning scene
@@ -329,6 +331,7 @@ def pick_object(moveit, arm, display_publisher, display_node, gripper_client,
         state_update_wait,
         rviz_display_wait,
         interactive_mode,
+        pose_link = "gripper_base",
     ):
         return False
 
@@ -344,6 +347,7 @@ def pick_object(moveit, arm, display_publisher, display_node, gripper_client,
         state_update_wait,
         rviz_display_wait,
         interactive_mode,
+        pose_link = "gripper_base",
     ):
         return False
 
@@ -381,6 +385,7 @@ def pick_object(moveit, arm, display_publisher, display_node, gripper_client,
         state_update_wait,
         rviz_display_wait,
         interactive_mode,
+        pose_link = "gripper_base",
     ):
         print("Lift planning failed.")
         return False
@@ -407,6 +412,9 @@ def main():
     gripper_open = 0.000
     gripper_close = 0.031
     gripper_max_effort = 10.0
+
+    # Box specific gripper positions
+    gripper_box_2cm = 0.025
 
     # Box dimensions
     box_name = "pick_box"
@@ -450,23 +458,23 @@ def main():
         },
     ]
 
-    box_1 = {
+    box_2cm = {
         "box_name": box_name,
         "box_size": box_size,
         "box_position": box_position,
         "approach_pose": {
             "position": (0.40, 0.00, 0.20),
-            "orientation": (1.000, 0.000, 0.000, 0.000),
+            "orientation": (-0.500, 0.500, -0.500, 0.500),
         },
         "grasp_pose": {
-            "position": (0.40, 0.00, 0.06),
-            "orientation": (1.000, 0.000, 0.000, 0.000),
+            "position": (0.40, 0.00, 0.025),
+            "orientation": (-0.500, 0.500, -0.500, 0.500),
         },
         "lift_pose": {
             "position": (0.40, 0.00, 0.20),
-            "orientation": (1.000, 0.000, 0.000, 0.000),
+            "orientation": (-0.500, 0.500, -0.500, 0.500),
         },
-        "gripper_position": 0.031,
+        "gripper_position": gripper_box_2cm,
     }
 
     # Joint positions in radians
@@ -666,7 +674,7 @@ def main():
                     display_publisher=display_publisher,
                     display_node=display_node,
                     gripper_client=gripper_client,
-                    object_data=box_1,
+                    object_data=box_2cm,
                     state_update_wait=state_update_wait,
                     rviz_display_wait=rviz_display_wait,
                     interactive_mode=interactive_mode,
