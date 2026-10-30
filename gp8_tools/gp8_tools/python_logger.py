@@ -2,6 +2,7 @@ import csv
 from pathlib import Path
 import rclpy
 from rclpy.node import Node
+from rclpy.duration import Duration
 from sensor_msgs.msg import JointState
 from tf2_ros import Buffer, TransformListener
 from rclpy.time import Time
@@ -65,8 +66,11 @@ class JointStateLogger(Node):
 
         try:
             tool_transform = self.tf_buffer.lookup_transform('base_link', 'tool0',
-                                                             Time.from_msg(msg.header.stamp))
-        except:
+                                                             Time(), timeout=Duration(seconds=0.01))
+        except Exception as error:
+            self.get_logger().warning(
+                f"TF lookup failed: {error}" 
+            )
             return
 
         if self.first_timestamp is None:

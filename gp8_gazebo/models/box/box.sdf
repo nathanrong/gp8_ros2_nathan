@@ -10,56 +10,6 @@
         <inertia>
           <ixx>0.0000417</ixx>
           <iyy>0.0000417</iyy>
-
-<sdf version="1.9">
-  <model name="pick_box">
-    <static>false</static>
-
-    <link name="box_link">
-      <inertial>
-        <mass>0.10</mass>
-        <inertia>
-          <ixx>0.0000417</ixx>
-          <iyy>0.0000417</iyy>
-          <izz>0.0000417</izz>
-          <ixy>0.0</ixy>
-          <ixz>0.0</ixz>
-          <iyz>0.0</iyz>
-        </inertia>
-      </inertial>
-
-      <visual name="box_visual">
-        <geometry>
-          <box>
-            <size>0.02 0.02 0.02</size>
-          </box>
-        </geometry>
-
-        <material>
-          <ambient>0.8 0.1 0.1 1</ambient>
-          <diffuse>0.8 0.1 0.1 1</diffuse>
-        </material>
-      </visual>
-
-      <collision name="box_collision">
-        <geometry>
-          <box>
-            <size>0.02 0.02 0.02</size>
-          </box>
-        </geometry>
-
-        <surface>
-          <friction>
-            <ode>
-              <mu>1.0</mu>
-              <mu2>1.0</mu2>
-            </ode>
-          </friction>
-        </surface>
-      </collision>
-    </link>
-  </model>
-</sdf>
           <izz>0.0000417</izz>
           <ixy>0.0</ixy>
           <ixz>0.0</ixz>

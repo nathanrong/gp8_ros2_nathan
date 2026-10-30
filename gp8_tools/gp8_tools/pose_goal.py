@@ -153,7 +153,7 @@ def publish_trajectory(display_publisher, plan_result):
     display_trajectory.trajectory.append(trajectory_msg)
     display_publisher.publish(display_trajectory)
 
-def command_gripper(node, gripper_client, position, max_effort=10.0):
+def command_gripper(node, gripper_client, position, max_effort=10.0, accept_stall=False):
     # Command the gripper and wait for action result. 
     # Gripper takes two floats: position and max effort
     # Position: 0.000 = open, 0.031 = closed
@@ -179,13 +179,14 @@ def command_gripper(node, gripper_client, position, max_effort=10.0):
     rclpy.spin_until_future_complete(node, result_future)
     result = result_future.result().result
 
-    node.get_logger().info(
-        f"Gripper result: position = {result.position:.3f} m, "
-        f"effort = {result.effort:.3f} N, "
-        f"reached_goal = {result.reached_goal}, "
-        f"stalled = {result.stalled}"
-    )
-    return result.reached_goal
+    if result.reached_goal:
+        return True
+    if result.stalled and accept_stall:
+        node.get_logger().info(
+            "Gripper stalled against the object. Treat as contact..."
+        )
+        return True
+    return False
 
 def add_box_to_planning_scene(moveit, box_name, box_size, box_position):
     # Add box to MoveIt planning scene
@@ -357,6 +358,7 @@ def pick_object(moveit, arm, display_publisher, display_node, gripper_client,
         gripper_client,
         object_data["gripper_position"],
         gripper_max_effort,
+        accept_stall=True,
     ):
         return False
 
@@ -371,7 +373,7 @@ def pick_object(moveit, arm, display_publisher, display_node, gripper_client,
         box_name = object_data["box_name"],
         box_size = object_data["box_size"],
         box_position = object_data["box_position"],
-        robot_link="tool0",
+        robot_link="gripper_base",
     )
 
     print("Planning lift pose...")
@@ -413,12 +415,6 @@ def main():
     gripper_close = 0.031
     gripper_max_effort = 10.0
 
-    # Box specific gripper positions
-    robot_bottom = 0.05
-    floor_clearance = 0.005
-    gripper_box_2cm = 0.025
-    gripper_mesh_bot = 0.065 + floor_clearance - robot_bottom
-
     # Box dimensions
     box_name = "pick_box"
     box_sdf_path = (
@@ -432,9 +428,21 @@ def main():
         / "box.sdf"
     )
     box_size = (0.02, 0.02, 0.02)
-    box_position = (0.40, 0.00, 0.01)
+    box_position_world = (0.40, 0.00, 0.01)
     box_height = box_size[2]
-    box_bottom = box_position[2] - 0.5 * box_height
+    box_bottom_world = box_position_world[2] - 0.5 * box_height
+
+    # Box Transformation
+    # since robot spawns at z = 0.05 
+    robot_bottom = 0.05
+    box_position_base = (box_position_world[0], box_position_world[1], box_position_world[2] - robot_bottom)
+    floor_clearance = 0.025
+    gripper_box_2cm = 0.025
+    gripper_mesh_bot = 0.065
+    grasp_2cm_world = box_bottom_world + gripper_mesh_bot + floor_clearance
+    grasp_2cm_base = grasp_2cm_world - robot_bottom
+    approach_offset = 0.10
+    approach_2cm = grasp_2cm_base + approach_offset
 
     ## GLOBALS ##
 
@@ -466,17 +474,17 @@ def main():
     box_2cm = {
         "box_name": box_name,
         "box_size": box_size,
-        "box_position": box_position,
+        "box_position": box_position_base,
         "approach_pose": {
-            "position": (0.40, 0.00, 0.1 + gripper_mesh_bot + box_bottom),
+            "position": (0.40, 0.00, approach_2cm),
             "orientation": (-0.500, 0.500, -0.500, 0.500),
         },
         "grasp_pose": {
-            "position": (0.40, 0.00, gripper_mesh_bot + box_bottom),
+            "position": (0.40, 0.00, grasp_2cm_base),
             "orientation": (-0.500, 0.500, -0.500, 0.500),
         },
         "lift_pose": {
-            "position": (0.40, 0.00, 0.1 + gripper_mesh_bot + box_bottom),
+            "position": (0.40, 0.00, approach_2cm),
             "orientation": (-0.500, 0.500, -0.500, 0.500),
         },
         "gripper_position": gripper_box_2cm,
@@ -665,9 +673,9 @@ def main():
                 )
 
             elif command == "b":
-                box_spawn = spawn_box_in_gazebo(display_node, box_name, box_sdf_path, box_position)
+                box_spawn = spawn_box_in_gazebo(display_node, box_name, box_sdf_path, box_position_world)
                 if box_spawn:
-                    add_box_to_planning_scene(moveit, box_name, box_size, box_position)
+                    add_box_to_planning_scene(moveit, box_name, box_size, box_position_base)
                     print("Box added to Gazebo and Moveit...")
                 else:
                     print("Box failed to spawn into Gazebo and was not added to MoveIt...")
