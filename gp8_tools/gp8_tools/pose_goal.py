@@ -414,7 +414,10 @@ def main():
     gripper_max_effort = 10.0
 
     # Box specific gripper positions
+    robot_bottom = 0.05
+    floor_clearance = 0.005
     gripper_box_2cm = 0.025
+    gripper_mesh_bot = 0.065 + floor_clearance - robot_bottom
 
     # Box dimensions
     box_name = "pick_box"
@@ -430,13 +433,15 @@ def main():
     )
     box_size = (0.02, 0.02, 0.02)
     box_position = (0.40, 0.00, 0.01)
+    box_height = box_size[2]
+    box_bottom = box_position[2] - 0.5 * box_height
 
     ## GLOBALS ##
 
     move_mode = move_mode.upper()
     if move_mode not in {"PTP", "LIN"}:
         raise ValueError("Incorrect mode selected...")
-
+    
     ## TEMPORARY VALUES
     # Define target pose (single or multi)
     targets = [
@@ -463,15 +468,15 @@ def main():
         "box_size": box_size,
         "box_position": box_position,
         "approach_pose": {
-            "position": (0.40, 0.00, 0.20),
+            "position": (0.40, 0.00, 0.1 + gripper_mesh_bot + box_bottom),
             "orientation": (-0.500, 0.500, -0.500, 0.500),
         },
         "grasp_pose": {
-            "position": (0.40, 0.00, 0.025),
+            "position": (0.40, 0.00, gripper_mesh_bot + box_bottom),
             "orientation": (-0.500, 0.500, -0.500, 0.500),
         },
         "lift_pose": {
-            "position": (0.40, 0.00, 0.20),
+            "position": (0.40, 0.00, 0.1 + gripper_mesh_bot + box_bottom),
             "orientation": (-0.500, 0.500, -0.500, 0.500),
         },
         "gripper_position": gripper_box_2cm,
