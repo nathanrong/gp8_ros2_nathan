@@ -1,4 +1,5 @@
 import csv
+import time
 from pathlib import Path
 import rclpy
 from rclpy.node import Node
@@ -16,14 +17,15 @@ class JointStateLogger(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
-        self.first_timestamp = None
+        self.first_sim_timestamp = None
+        self.first_real_timestamp = None
         output_directory = (Path.home()/'ros2_ws'/'src'/'gp8_ros2'/'data')
         output_file = output_directory / 'gp8_data_out.csv'
         self.file = open(output_file, 'w', newline='')
 
         self.writer = csv.writer(self.file)
         
-        header = ['time (s)']
+        header = ['sim_time (s)', 'real_time (s)']
         for joint_name in joint_order:
             header.append(f'{joint_name}_position_rad')
         for joint_name in joint_order:
@@ -62,7 +64,8 @@ class JointStateLogger(Node):
         if not required_positions or not required_velocities:
             return
 
-        timestamp = (msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9)
+        sim_timestamp = (msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9)
+        real_timestamp = time.perf_counter()
 
         try:
             tool_transform = self.tf_buffer.lookup_transform('base_link', 'tool0',
@@ -73,12 +76,14 @@ class JointStateLogger(Node):
             )
             return
 
-        if self.first_timestamp is None:
-            self.first_timestamp = timestamp
+        if self.first_sim_timestamp is None:
+            self.first_sim_timestamp = sim_timestamp
+            self.first_real_timestamp = real_timestamp
 
-        elapsed_time = timestamp - self.first_timestamp
+        sim_elapsed_time = sim_timestamp - self.first_sim_timestamp
+        real_elapsed_time = real_timestamp - self.first_real_timestamp
 
-        row = [f'{elapsed_time:.9f}']
+        row = [f'{sim_elapsed_time:.9f}', f'{real_elapsed_time:.9f}']
         for joint_name in joint_order:
             row.append(f'{positions[joint_name]:.9f}')
         for joint_name in joint_order:
@@ -102,7 +107,8 @@ class JointStateLogger(Node):
 
     def close_file(self):
         if not self.file.closed:
-            self.close_file()
+            self.file.flush()
+            self.file.close()
 
 def main(args=None):
     rclpy.init(args=args)
