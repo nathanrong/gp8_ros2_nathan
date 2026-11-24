@@ -11,7 +11,7 @@ from geometry_msgs.msg import Pose, PoseStamped
 from launch_param_builder import load_yaml
 from moveit.planning import MoveItPy
 from moveit_configs_utils import MoveItConfigsBuilder
-from moveit_msgs.msg import DisplayTrajectory, CollisionObject, AttachedCollisionObject
+from moveit_msgs.msg import DisplayTrajectory, CollisionObject, AttachedCollisionObject, Constraints, PositionConstraint
 from moveit.core.robot_state import RobotState
 from shape_msgs.msg import SolidPrimitive
 
@@ -38,6 +38,34 @@ def make_pose_goal(target):
 
     return pose_goal
 
+def make_position_only_goal(target, pose_link="tool0", tolerance=0.001):
+    # MoveIt will constrain the selected link to the requested XYZ position
+    position_goal = PositionConstraint()
+    position_goal.header.frame_id = "base_link"
+    position_goal.link_name = pose_link
+    position_goal.weight = 1.0
+
+    x, y, z = target["position"]
+
+    # Allowed position region: sphere with radius = tolerance
+    sphere = SolidPrimitive()
+    sphere.type = SolidPrimitive.SPHERE
+    sphere.dimensions = [tolerance]
+
+    sphere_pose = Pose()
+    sphere_pose.position.x = x
+    sphere_pose.position.y = y
+    sphere_pose.position.z = z
+    sphere_pose.orientation.w = 1.0
+
+    position_goal.constraint_region.primitives.append(sphere)
+    position_goal.constraint_region.primitive_poses.append(sphere_pose)
+
+    goal_constraints = Constraints()
+    goal_constraints.position_constraints.append(position_goal)
+
+    return goal_constraints
+
 def execute_pose_targets(
     moveit,
     arm,
@@ -48,6 +76,7 @@ def execute_pose_targets(
     rviz_display_wait,
     interactive_mode,
     pose_link = "tool0",
+    position_only = False,
 ):
     # Plan and execute the tool0 target sequence
     # tool0 default pose goal, can replace with other joints/gripper
@@ -64,10 +93,22 @@ def execute_pose_targets(
         time.sleep(state_update_wait)
 
         arm.set_start_state_to_current_state()
-        arm.set_goal_state(
-            pose_stamped_msg=make_pose_goal(target),
-            pose_link=pose_link,
-        )
+
+        if position_only:
+            arm.set_goal_state(
+                motion_plan_constraints=[
+                    make_position_only_goal(
+                        target,
+                        pose_link=pose_link,
+                        tolerance=0.001,
+                    )
+                ]
+            )
+        else:
+            arm.set_goal_state(
+                pose_stamped_msg=make_pose_goal(target),
+                pose_link=pose_link,
+            )
 
         plan_result = arm.plan()
 
@@ -459,15 +500,15 @@ def main():
         # },
         {
             "position": (0.46, 0.000, 0.715),
-            "orientation": (0.70711, 0.000, 0.70711, 0.000),
+            "orientation": (0.707107, 0.000, 0.707107, 0.000),
         },
         {
             "position": (0.39265, 0.065584, 0.788641),
-            "orientation": (0.63792, 0.26147, 0.70011, 0.18585),
+            "orientation": (0.637909, 0.261493, 0.700105, 0.185866),
         },
         {
             "position": (0.305469, 0.096623, 0.853482),
-            "orientation": (0.49716, 0.43416, 0.64352, 0.38759),
+            "orientation": (0.497165, 0.434162, 0.643534, 0.387549),
         },
     ]
 
@@ -606,7 +647,8 @@ def main():
 
         while True:
             print("\n---------- GP8 CONTROL MENU ----------")
-            print("z = execute tool0 target sequence")
+            print("z = execute full tool0 pose sequence")
+            print("x = execute position-only tool0 sequence")
             print("o = open gripper")
             print("c = close gripper")
             print("s = move to safe position")
@@ -632,6 +674,23 @@ def main():
                     state_update_wait=state_update_wait,
                     rviz_display_wait=rviz_display_wait,
                     interactive_mode=interactive_mode,
+                    pose_link="tool0",
+                    position_only=False,
+                )
+
+            
+            elif command == "x":
+                execute_pose_targets(
+                    moveit=moveit,
+                    arm=arm,
+                    display_publisher=display_publisher,
+                    targets=targets,
+                    move_mode=move_mode,
+                    state_update_wait=state_update_wait,
+                    rviz_display_wait=rviz_display_wait,
+                    interactive_mode=interactive_mode,
+                    pose_link="tool0",
+                    position_only=True,
                 )
 
             elif command == "o":
