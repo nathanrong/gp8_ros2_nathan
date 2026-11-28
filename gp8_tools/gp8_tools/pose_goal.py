@@ -1,8 +1,9 @@
-
 from pathlib import Path
 import subprocess
 import time
 import math
+import csv
+from tf2_ros import Buffer, TransformListener
 import rclpy
 from rclpy.action import ActionClient
 from control_msgs.action import GripperCommand
@@ -65,6 +66,166 @@ def make_position_only_goal(target, pose_link="tool0", tolerance=0.001):
     goal_constraints.position_constraints.append(position_goal)
 
     return goal_constraints
+
+def load_position_targets(csv_path):
+    # Load position-only targets from a CSV file
+    # Expected columns: target_id, x_m, y_m, z_m
+    targets = []
+
+    with open(csv_path, newline="") as csv_file:
+        reader = csv.DictReader(csv_file)
+        for row in reader:
+            targets.append({
+                "target_id": row["target_id"],
+                "position": (
+                    float(row["x_m"]),
+                    float(row["y_m"]),
+                    float(row["z_m"]),
+                ),
+            })
+    return targets
+
+def get_current_tool_position(tf_buffer, node, tool_link="tool0"):
+    # Read the current tool position from TF.
+    # Allow recent TF messages to be processed
+    for _ in range(10):
+        rclpy.spin_once(node, timeout_sec=0.05)
+
+    try:
+        transform = tf_buffer.lookup_transform(
+            "base_link",
+            tool_link,
+            rclpy.time.Time(),
+        )
+
+        translation = transform.transform.translation
+
+        return (
+            translation.x,
+            translation.y,
+            translation.z,
+        )
+
+    except Exception as error:
+        node.get_logger().error(
+            f"Could not obtain final tool position: {error}"
+        )
+        return None
+
+def run_csv_position_sequence(
+    moveit,
+    arm,
+    display_publisher,
+    display_node,
+    tf_buffer,
+    csv_targets,
+    home_state,
+    output_csv_path,
+    state_update_wait,
+    waypoint_pause,
+    rviz_display_wait,
+    interactive_mode,
+):
+    # Execute every CSV target using position-only planning.
+    # Sequence: home -> target 1 -> home -> target 2 -> home -> ...
+
+    with open(output_csv_path, "w", newline="") as csv_file:
+        writer = csv.writer(csv_file)
+
+        writer.writerow([
+            "target_id",
+            "target_x_m",
+            "target_y_m",
+            "target_z_m",
+            "result_x_m",
+            "result_y_m",
+            "result_z_m",
+        ])
+
+        print("Moving to home position before CSV sequence...")
+
+        home_success = move_to_joint_state(
+            moveit=moveit,
+            arm=arm,
+            display_publisher=display_publisher,
+            joint_positions=home_state,
+            state_name="home position",
+            state_update_wait=state_update_wait,
+            waypoint_pause=waypoint_pause,
+        )
+
+        if not home_success:
+            print("Could not reach home position. Aborting.")
+            return False
+
+        for target_index, target in enumerate(csv_targets, start=1):
+            target_id = target["target_id"]
+            target_position = target["position"]
+
+            print(
+                f"\nExecuting target "
+                f"{target_index}/{len(csv_targets)}: {target_id}"
+            )
+            print(f"Target position: {target_position}")
+
+            target_success = execute_pose_targets(
+                moveit=moveit,
+                arm=arm,
+                display_publisher=display_publisher,
+                targets=[target],
+                move_mode="PTP",
+                state_update_wait=state_update_wait,
+                rviz_display_wait=rviz_display_wait,
+                interactive_mode=interactive_mode,
+                pose_link="tool0",
+                position_only=True,
+            )
+
+            # Read the result before returning home
+            result_position = get_current_tool_position(
+                tf_buffer=tf_buffer,
+                node=display_node,
+                tool_link="tool0",
+            )
+
+            if result_position is None:
+                result_position = ("", "", "")
+
+            writer.writerow([
+                target_id,
+                target_position[0],
+                target_position[1],
+                target_position[2],
+                result_position[0],
+                result_position[1],
+                result_position[2],
+            ])
+
+            # Save the row immediately
+            csv_file.flush()
+
+            if target_success:
+                print(f"Target {target_id} completed successfully.")
+            else:
+                print(f"Target {target_id} failed.")
+
+            # Return home before the next target
+            home_success = move_to_joint_state(
+                moveit=moveit,
+                arm=arm,
+                display_publisher=display_publisher,
+                joint_positions=home_state,
+                state_name="home position",
+                state_update_wait=state_update_wait,
+                waypoint_pause=waypoint_pause,
+            )
+
+            if not home_success:
+                print("Could not return home. Aborting CSV sequence.")
+                return False
+
+    print(f"\nSaved results to:\n{output_csv_path}")
+    return True
 
 def execute_pose_targets(
     moveit,
@@ -549,6 +710,33 @@ def main():
             "joint_5_b": 0.0,
             "joint_6_t": 0.0,
         }
+
+    # Define CSV inputs/outputs if necessary
+    stage_b_input_csv = (
+        Path.home()
+        / "ros2_ws"
+        / "src"
+        / "gp8_ros2"
+        / "data"
+        / "gp8_stageB_50_xyz_targets.csv"
+    )
+    
+    stage_b_output_csv = (
+        Path.home()
+        / "ros2_ws"
+        / "src"
+        / "gp8_ros2"
+        / "data"
+        / "gp8_stageB_results.csv"
+    )
+
+    # Load CSV
+    csv_targets = load_position_targets(stage_b_input_csv)
+    
+    print(
+        f"Loaded {len(csv_targets)} position targets "
+        f"from {stage_b_input_csv}"
+    )
     
     # Build the complete MoveIt configuration.
     moveit_config = (
@@ -627,6 +815,9 @@ def main():
 
     rclpy.init()
     display_node = rclpy.create_node("gp8_trajectory_display")
+    tf_buffer = Buffer()
+    tf_listener = TransformListener(tf_buffer, display_node)
+    
     display_publisher = display_node.create_publisher(
         DisplayTrajectory,
         "/move_group/display_planned_path",
@@ -649,6 +840,7 @@ def main():
             print("\n---------- GP8 CONTROL MENU ----------")
             print("z = execute full tool0 pose sequence")
             print("x = execute position-only tool0 sequence")
+            print("v = execute position-only targets from CSV")
             print("o = open gripper")
             print("c = close gripper")
             print("s = move to safe position")
@@ -691,6 +883,22 @@ def main():
                     interactive_mode=interactive_mode,
                     pose_link="tool0",
                     position_only=True,
+                )
+
+            elif command == "v":
+                run_csv_position_sequence(
+                    moveit=moveit,
+                    arm=arm,
+                    display_publisher=display_publisher,
+                    display_node=display_node,
+                    tf_buffer=tf_buffer,
+                    csv_targets=csv_targets,
+                    home_state=home_state,
+                    output_csv_path=stage_b_output_csv,
+                    state_update_wait=state_update_wait,
+                    waypoint_pause=waypoint_pause,
+                    rviz_display_wait=rviz_display_wait,
+                    interactive_mode=interactive_mode,
                 )
 
             elif command == "o":
