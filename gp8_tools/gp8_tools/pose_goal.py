@@ -85,32 +85,40 @@ def load_position_targets(csv_path):
             })
     return targets
 
-def get_current_tool_position(tf_buffer, node, tool_link="tool0"):
-    # Read the current tool position from TF.
-    # Allow recent TF messages to be processed
-    for _ in range(10):
-        rclpy.spin_once(node, timeout_sec=0.05)
+def poll_final_tool_position(
+    tf_buffer,
+    node,
+    tool_link="tool0",
+    poll_duration=0.5,
+    poll_period=0.01,
+):
+    # Continuously poll TF and return the newest tool position.
 
-    try:
-        transform = tf_buffer.lookup_transform(
-            "base_link",
-            tool_link,
-            rclpy.time.Time(),
-        )
+    latest_position = None
+    end_time = time.monotonic() + poll_duration
 
-        translation = transform.transform.translation
+    while time.monotonic() < end_time:
+        rclpy.spin_once(node, timeout_sec=poll_period)
 
-        return (
-            translation.x,
-            translation.y,
-            translation.z,
-        )
+        try:
+            transform = tf_buffer.lookup_transform(
+                "base_link",
+                tool_link,
+                rclpy.time.Time(),
+            )
 
-    except Exception as error:
-        node.get_logger().error(
-            f"Could not obtain final tool position: {error}"
-        )
-        return None
+            translation = transform.transform.translation
+
+            latest_position = (
+                translation.x,
+                translation.y,
+                translation.z,
+            )
+
+        except Exception:
+            pass
+
+    return latest_position
 
 def run_csv_position_sequence(
     moveit,
@@ -181,35 +189,32 @@ def run_csv_position_sequence(
                 position_only=True,
             )
 
-            # Read the result before returning home
-            result_position = get_current_tool_position(
+            # Poll continuously after reaching the target
+            result_position = poll_final_tool_position(
                 tf_buffer=tf_buffer,
                 node=display_node,
                 tool_link="tool0",
+                poll_duration=0.5,
+                poll_period=0.01,
             )
 
             if result_position is None:
                 result_position = ("", "", "")
 
+            # Write the result before returning home
             writer.writerow([
-                target_id,
-                target_position[0],
-                target_position[1],
-                target_position[2],
+                target["target_id"],
+                target["position"][0],
+                target["position"][1],
+                target["position"][2],
                 result_position[0],
                 result_position[1],
                 result_position[2],
             ])
 
-            # Save the row immediately
             csv_file.flush()
 
-            if target_success:
-                print(f"Target {target_id} completed successfully.")
-            else:
-                print(f"Target {target_id} failed.")
-
-            # Return home before the next target
+            # Only now return home
             home_success = move_to_joint_state(
                 moveit=moveit,
                 arm=arm,
@@ -219,7 +224,6 @@ def run_csv_position_sequence(
                 state_update_wait=state_update_wait,
                 waypoint_pause=waypoint_pause,
             )
-
             if not home_success:
                 print("Could not return home. Aborting CSV sequence.")
                 return False
